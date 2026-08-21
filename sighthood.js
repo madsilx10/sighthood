@@ -8,7 +8,7 @@ const SIGHTHOOD_JWT = 'YOUR_SIGHTHOOD_JWT';
 const DELAY_MS      = 3000;
 
 const X_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRIlgAAAA'
-               + 'AAnNwIzUejRCOuH5E6l8xnZz4puTs'
+               + 'AAnNwIzUejRCOuH5E6I8xnZz4puTs'
                + '%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
 const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
