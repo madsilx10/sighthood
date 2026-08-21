@@ -66,6 +66,28 @@ async function connectX({ index, authToken, ct0 }) {
     log(tag, 'OAuth URL:', xOAuthUrl);
     const oauthParams = new URLSearchParams(new URL(xOAuthUrl).searchParams).toString();
 
+    // Step 1.5 – sanity check: apakah cookie+bearer ini valid buat X sama sekali?
+    log(tag, 'Step 1.5: sanity check verify_credentials');
+    const vcResp = await fetch('https://x.com/i/api/1.1/account/verify_credentials.json', {
+      headers: {
+        Authorization:    `Bearer ${X_BEARER}`,
+        Cookie:            cookie,
+        'X-Csrf-Token':    ct0,
+        'User-Agent':      UA,
+        'X-Twitter-Active-User': 'yes',
+        'X-Twitter-Auth-Type':   'OAuth2Session',
+      },
+    });
+    if (!vcResp.ok) {
+      const body = (await vcResp.text()).slice(0, 200);
+      log(tag, `⚠️ Sanity check GAGAL juga (${vcResp.status}): ${body}`);
+      log(tag, '→ Berarti bearer/cookie ini emang gak keauth di X sama sekali, bukan masalah endpoint oauth2.');
+    } else {
+      const me = await vcResp.json();
+      log(tag, `✅ Sanity check OK, login sebagai @${me.screen_name}`);
+      log(tag, '→ Auth valid di X. Berarti Step 2 gagal karena hal lain (header/param spesifik oauth2 authorize).');
+    }
+
     // Step 2 – GET x.com internal authorize → auth_code
     log(tag, 'Step 2: GET x.com/i/api/2/oauth2/authorize');
     const authResp = await fetch(`https://x.com/i/api/2/oauth2/authorize?${oauthParams}`, {
