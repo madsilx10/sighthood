@@ -1,7 +1,6 @@
 'use strict';
 const { readFileSync } = require('fs');
 const readline = require('readline');
-const { req: cf } = require('curl-cffi');
 
 // ─── CONFIG ────────────────────────────────────────────────────
 const AKUN_FILE     = './akun.txt';
@@ -17,7 +16,6 @@ const X_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAA'
 
 const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
          + '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
-const IMPERSONATE = 'chrome136';
 // ───────────────────────────────────────────────────────────────
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -70,7 +68,6 @@ async function connectX({ index, authToken, ct0 }) {
     xOAuthUrl = xOAuthUrl.replace('twitter.com', 'x.com');
     log(tag, 'OAuth URL:', xOAuthUrl);
     const oauthParams = new URLSearchParams(new URL(xOAuthUrl).searchParams).toString();
-    const parsedQs = new URL(xOAuthUrl).searchParams;
 
     const xHeaders = {
       Cookie:                       cookie,
@@ -79,42 +76,36 @@ async function connectX({ index, authToken, ct0 }) {
       'User-Agent':                 UA,
       Referer:                      xOAuthUrl,
       Origin:                       'https://x.com',
+      Accept:                       '*/*',
+      'Accept-Language':            'id-ID,id;q=0.9,en-US;q=0.8',
+      'Sec-Fetch-Dest':             'empty',
+      'Sec-Fetch-Mode':             'cors',
+      'Sec-Fetch-Site':             'same-origin',
+      'X-Twitter-Active-User':      'yes',
+      'X-Twitter-Auth-Type':        'OAuth2Session',
+      'X-Twitter-Client-Language':  'id',
     };
 
-    // Step 2 – GET x.com internal authorize → auth_code (curl-cffi, impersonate chrome)
+    // Step 2 – GET x.com internal authorize → auth_code
     log(tag, 'Step 2: GET x.com/i/api/2/oauth2/authorize');
-    const authResp = await cf.get('https://x.com/i/api/2/oauth2/authorize', {
-      params: {
-        response_type:         parsedQs.get('response_type') || 'code',
-        client_id:             parsedQs.get('client_id') || '',
-        redirect_uri:          parsedQs.get('redirect_uri') || '',
-        scope:                 parsedQs.get('scope') || '',
-        state:                 parsedQs.get('state') || '',
-        code_challenge:        parsedQs.get('code_challenge') || '',
-        code_challenge_method: parsedQs.get('code_challenge_method') || 'S256',
-      },
-      headers: { ...xHeaders, 'Content-Type': 'application/json' },
-      impersonate: IMPERSONATE,
+    const authResp = await fetch(`https://x.com/i/api/2/oauth2/authorize?${oauthParams}`, {
+      headers: xHeaders,
     });
-    if (authResp.statusCode !== 200) {
-      throw new Error(`Step 2 gagal ${authResp.statusCode}: ${JSON.stringify(authResp.data).slice(0, 200)}`);
-    }
-    const auth_code = authResp.data?.auth_code;
-    if (!auth_code) throw new Error(`auth_code tidak ada di response: ${JSON.stringify(authResp.data).slice(0, 200)}`);
+    if (!authResp.ok) throw new Error(`Step 2 gagal ${authResp.status}: ${(await authResp.text()).slice(0, 200)}`);
+    const { auth_code } = await authResp.json();
+    if (!auth_code) throw new Error('auth_code tidak ada di response');
     log(tag, 'auth_code:', auth_code);
 
-    // Step 3 – POST approval (curl-cffi, impersonate chrome)
+    // Step 3 – POST approval
     log(tag, 'Step 3: POST approval');
-    const approveResp = await cf.post('https://x.com/i/api/2/oauth2/authorize', {
+    const approveResp = await fetch('https://x.com/i/api/2/oauth2/authorize', {
+      method: 'POST',
       headers: { ...xHeaders, 'Content-Type': 'application/x-www-form-urlencoded' },
-      data: { approval: 'true', code: auth_code },
-      impersonate: IMPERSONATE,
+      body: `approval=true&code=${encodeURIComponent(auth_code)}`,
     });
-    if (approveResp.statusCode !== 200) {
-      throw new Error(`Step 3 gagal ${approveResp.statusCode}: ${JSON.stringify(approveResp.data).slice(0, 200)}`);
-    }
-    const redirect_uri = approveResp.data?.redirect_uri;
-    if (!redirect_uri) throw new Error(`redirect_uri tidak ada: ${JSON.stringify(approveResp.data).slice(0, 200)}`);
+    if (!approveResp.ok) throw new Error(`Step 3 gagal ${approveResp.status}: ${(await approveResp.text()).slice(0, 200)}`);
+    const { redirect_uri } = await approveResp.json();
+    if (!redirect_uri) throw new Error('redirect_uri tidak ada');
     log(tag, 'redirect_uri:', redirect_uri);
 
     // Step 4 – callback sighthood
