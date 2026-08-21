@@ -1,6 +1,7 @@
 'use strict';
 const { readFileSync } = require('fs');
 const readline = require('readline');
+const { ClientTransaction, fetchXDocument } = require('x-client-transaction-id');
 
 // ─── CONFIG ────────────────────────────────────────────────────
 const AKUN_FILE     = './akun.txt';
@@ -16,6 +17,19 @@ const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
 // ───────────────────────────────────────────────────────────────
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Cache instance ClientTransaction — gak perlu re-fetch homepage x.com tiap akun,
+// karena algoritma transaction-id ini gak tergantung cookie/session akun.
+let _txInstance = null;
+async function getTx() {
+  if (!_txInstance) {
+    log('TX', 'Init ClientTransaction (fetch x.com homepage sekali)...');
+    const doc = await fetchXDocument();
+    _txInstance = await ClientTransaction.create(doc);
+    log('TX', 'ClientTransaction siap.');
+  }
+  return _txInstance;
+}
 
 function log(tag, ...args) {
   const ts = new Date().toTimeString().slice(0, 8);
@@ -90,6 +104,8 @@ async function connectX({ index, authToken, ct0 }) {
 
     // Step 2 – GET x.com internal authorize → auth_code
     log(tag, 'Step 2: GET x.com/i/api/2/oauth2/authorize');
+    const tx = await getTx();
+    const txIdStep2 = await tx.generateTransactionId('GET', '/i/api/2/oauth2/authorize');
     const authResp = await fetch(`https://x.com/i/api/2/oauth2/authorize?${oauthParams}`, {
       headers: {
         Authorization:               `Bearer ${X_BEARER}`,
@@ -106,6 +122,7 @@ async function connectX({ index, authToken, ct0 }) {
         'X-Twitter-Active-User':      'yes',
         'X-Twitter-Auth-Type':        'OAuth2Session',
         'X-Twitter-Client-Language':  'id',
+        'X-Client-Transaction-Id':    txIdStep2,
       },
     });
     if (!authResp.ok) throw new Error(`Step 2 gagal ${authResp.status}: ${(await authResp.text()).slice(0, 200)}`);
@@ -116,7 +133,8 @@ async function connectX({ index, authToken, ct0 }) {
 
     // Step 3 – POST approval
     log(tag, 'Step 3: POST approval');
-    const approveResp = await fetch('https://x.com/api/2/oauth2/authorize', {
+    const txIdStep3 = await tx.generateTransactionId('POST', '/i/api/2/oauth2/authorize');
+    const approveResp = await fetch('https://x.com/i/api/2/oauth2/authorize', {
       method: 'POST',
       headers: {
         Authorization:               `Bearer ${X_BEARER}`,
@@ -133,6 +151,7 @@ async function connectX({ index, authToken, ct0 }) {
         'X-Twitter-Active-User':      'yes',
         'X-Twitter-Auth-Type':        'OAuth2Session',
         'X-Twitter-Client-Language':  'id',
+        'X-Client-Transaction-Id':    txIdStep3,
       },
       body: `approval=true&code=${encodeURIComponent(auth_code)}`,
     });
