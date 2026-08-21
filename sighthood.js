@@ -1,35 +1,26 @@
 'use strict';
 const { readFileSync } = require('fs');
 const readline = require('readline');
-const { ClientTransaction, fetchXDocument } = require('x-client-transaction-id');
+const { req: cf } = require('curl-cffi');
 
 // ─── CONFIG ────────────────────────────────────────────────────
 const AKUN_FILE     = './akun.txt';
 const SIGHTHOOD_JWT = 'YOUR_SIGHTHOOD_JWT';
 const DELAY_MS      = 3000;
 
-const X_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRIlgAAAA'
-               + 'AnNwIzUejRCOuH5E6I8xnZz4puTs'
+// Bearer publik X — FIXED: huruf L di "ANRILg" harus kapital (bukan "ANRIlg"),
+// dan ada 6x A sebelum "nNwIzU" (bukan 5x). Token lama ini yang bikin SEMUA
+// request ke x.com kena 401 "Could not authenticate you", termasuk sanity check.
+const X_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAA'
+               + 'nNwIzUejRCOuH5E6I8xnZz4puTs'
                + '%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
 const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
          + '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
+const IMPERSONATE = 'chrome136';
 // ───────────────────────────────────────────────────────────────
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-// Cache instance ClientTransaction — gak perlu re-fetch homepage x.com tiap akun,
-// karena algoritma transaction-id ini gak tergantung cookie/session akun.
-let _txInstance = null;
-async function getTx() {
-  if (!_txInstance) {
-    log('TX', 'Init ClientTransaction (fetch x.com homepage sekali)...');
-    const doc = await fetchXDocument();
-    _txInstance = await ClientTransaction.create(doc);
-    log('TX', 'ClientTransaction siap.');
-  }
-  return _txInstance;
-}
 
 function log(tag, ...args) {
   const ts = new Date().toTimeString().slice(0, 8);
@@ -79,86 +70,51 @@ async function connectX({ index, authToken, ct0 }) {
     xOAuthUrl = xOAuthUrl.replace('twitter.com', 'x.com');
     log(tag, 'OAuth URL:', xOAuthUrl);
     const oauthParams = new URLSearchParams(new URL(xOAuthUrl).searchParams).toString();
+    const parsedQs = new URL(xOAuthUrl).searchParams;
 
-    // Step 1.5 – sanity check: apakah cookie+bearer ini valid buat X sama sekali?
-    log(tag, 'Step 1.5: sanity check verify_credentials');
-    const vcResp = await fetch('https://x.com/i/api/1.1/account/verify_credentials.json', {
-      headers: {
-        Authorization:    `Bearer ${X_BEARER}`,
-        Cookie:            cookie,
-        'X-Csrf-Token':    ct0,
-        'User-Agent':      UA,
-        'X-Twitter-Active-User': 'yes',
-        'X-Twitter-Auth-Type':   'OAuth2Session',
-      },
-    });
-    if (!vcResp.ok) {
-      const body = (await vcResp.text()).slice(0, 200);
-      log(tag, `⚠️ Sanity check GAGAL juga (${vcResp.status}): ${body}`);
-      log(tag, '→ Berarti bearer/cookie ini emang gak keauth di X sama sekali, bukan masalah endpoint oauth2.');
-    } else {
-      const me = await vcResp.json();
-      log(tag, `✅ Sanity check OK, login sebagai @${me.screen_name}`);
-      log(tag, '→ Auth valid di X. Berarti Step 2 gagal karena hal lain (header/param spesifik oauth2 authorize).');
-    }
+    const xHeaders = {
+      Cookie:                       cookie,
+      Authorization:                `Bearer ${X_BEARER}`,
+      'X-Csrf-Token':               ct0,
+      'User-Agent':                 UA,
+      Referer:                      xOAuthUrl,
+      Origin:                       'https://x.com',
+    };
 
-    // Step 2 – GET x.com internal authorize → auth_code
+    // Step 2 – GET x.com internal authorize → auth_code (curl-cffi, impersonate chrome)
     log(tag, 'Step 2: GET x.com/i/api/2/oauth2/authorize');
-    const tx = await getTx();
-    const txIdStep2 = await tx.generateTransactionId('GET', '/i/api/2/oauth2/authorize');
-    const authResp = await fetch(`https://x.com/i/api/2/oauth2/authorize?${oauthParams}`, {
-      headers: {
-        Authorization:               `Bearer ${X_BEARER}`,
-        Cookie:                       cookie,
-        'X-Csrf-Token':               ct0,
-        'User-Agent':                 UA,
-        Accept:                       '*/*',
-        'Accept-Language':            'id-ID,id;q=0.9,en-US;q=0.8',
-        Origin:                       'https://x.com',
-        Referer:                      `https://x.com/i/oauth2/authorize?${oauthParams}`,
-        'Sec-Fetch-Dest':             'empty',
-        'Sec-Fetch-Mode':             'cors',
-        'Sec-Fetch-Site':             'same-origin',
-        'X-Twitter-Active-User':      'yes',
-        'X-Twitter-Auth-Type':        'OAuth2Session',
-        'X-Twitter-Client-Language':  'id',
-        'X-Client-Transaction-Id':    txIdStep2,
+    const authResp = await cf.get('https://x.com/i/api/2/oauth2/authorize', {
+      params: {
+        response_type:         parsedQs.get('response_type') || 'code',
+        client_id:             parsedQs.get('client_id') || '',
+        redirect_uri:          parsedQs.get('redirect_uri') || '',
+        scope:                 parsedQs.get('scope') || '',
+        state:                 parsedQs.get('state') || '',
+        code_challenge:        parsedQs.get('code_challenge') || '',
+        code_challenge_method: parsedQs.get('code_challenge_method') || 'S256',
       },
+      headers: { ...xHeaders, 'Content-Type': 'application/json' },
+      impersonate: IMPERSONATE,
     });
-    if (!authResp.ok) throw new Error(`Step 2 gagal ${authResp.status}: ${(await authResp.text()).slice(0, 200)}`);
-
-    const { auth_code } = await authResp.json();
-    if (!auth_code) throw new Error('auth_code tidak ada di response');
+    if (authResp.statusCode !== 200) {
+      throw new Error(`Step 2 gagal ${authResp.statusCode}: ${JSON.stringify(authResp.data).slice(0, 200)}`);
+    }
+    const auth_code = authResp.data?.auth_code;
+    if (!auth_code) throw new Error(`auth_code tidak ada di response: ${JSON.stringify(authResp.data).slice(0, 200)}`);
     log(tag, 'auth_code:', auth_code);
 
-    // Step 3 – POST approval
+    // Step 3 – POST approval (curl-cffi, impersonate chrome)
     log(tag, 'Step 3: POST approval');
-    const txIdStep3 = await tx.generateTransactionId('POST', '/i/api/2/oauth2/authorize');
-    const approveResp = await fetch('https://x.com/i/api/2/oauth2/authorize', {
-      method: 'POST',
-      headers: {
-        Authorization:               `Bearer ${X_BEARER}`,
-        Cookie:                       cookie,
-        'X-Csrf-Token':               ct0,
-        'Content-Type':               'application/x-www-form-urlencoded',
-        'User-Agent':                 UA,
-        Accept:                       '*/*',
-        Origin:                       'https://x.com',
-        Referer:                      `https://x.com/i/oauth2/authorize?${oauthParams}`,
-        'Sec-Fetch-Dest':             'empty',
-        'Sec-Fetch-Mode':             'cors',
-        'Sec-Fetch-Site':             'same-origin',
-        'X-Twitter-Active-User':      'yes',
-        'X-Twitter-Auth-Type':        'OAuth2Session',
-        'X-Twitter-Client-Language':  'id',
-        'X-Client-Transaction-Id':    txIdStep3,
-      },
-      body: `approval=true&code=${encodeURIComponent(auth_code)}`,
+    const approveResp = await cf.post('https://x.com/i/api/2/oauth2/authorize', {
+      headers: { ...xHeaders, 'Content-Type': 'application/x-www-form-urlencoded' },
+      data: { approval: 'true', code: auth_code },
+      impersonate: IMPERSONATE,
     });
-    if (!approveResp.ok) throw new Error(`Step 3 gagal ${approveResp.status}: ${(await approveResp.text()).slice(0, 200)}`);
-
-    const { redirect_uri } = await approveResp.json();
-    if (!redirect_uri) throw new Error('redirect_uri tidak ada');
+    if (approveResp.statusCode !== 200) {
+      throw new Error(`Step 3 gagal ${approveResp.statusCode}: ${JSON.stringify(approveResp.data).slice(0, 200)}`);
+    }
+    const redirect_uri = approveResp.data?.redirect_uri;
+    if (!redirect_uri) throw new Error(`redirect_uri tidak ada: ${JSON.stringify(approveResp.data).slice(0, 200)}`);
     log(tag, 'redirect_uri:', redirect_uri);
 
     // Step 4 – callback sighthood
