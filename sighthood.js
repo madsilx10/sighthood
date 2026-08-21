@@ -1,20 +1,6 @@
-/**
- * Sighthood – Connect X
- *
- * Usage:
- *   node sighthood.js 1     → akun ke-1
- *   node sighthood.js all   → semua akun
- *
- * Format akun.txt:
- *   authtoken
- *   ct0
- *
- *   authtoken
- *   ct0
- */
-
 'use strict';
 const { readFileSync } = require('fs');
+const readline = require('readline');
 
 // ─── CONFIG ────────────────────────────────────────────────────
 const AKUN_FILE     = './akun.txt';
@@ -28,15 +14,6 @@ const X_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRIlgAAAA'
 const UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
          + '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
 // ───────────────────────────────────────────────────────────────
-
-const mode = process.argv[2];
-
-if (!mode) {
-  console.log('Usage:');
-  console.log('  node sighthood.js 1     → akun ke-1');
-  console.log('  node sighthood.js all   → semua akun');
-  process.exit(0);
-}
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -52,6 +29,11 @@ function loadAccounts() {
     if (!authToken || !ct0) throw new Error(`Akun #${i + 1}: format salah`);
     return { index: i + 1, authToken, ct0 };
   });
+}
+
+function ask(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise(resolve => rl.question(question, ans => { rl.close(); resolve(ans.trim()); }));
 }
 
 async function connectX({ index, authToken, ct0 }) {
@@ -159,20 +141,40 @@ async function connectX({ index, authToken, ct0 }) {
 
 async function main() {
   const accounts = loadAccounts();
-  console.log(`Loaded ${accounts.length} akun\n`);
+  console.log(`\nLoaded ${accounts.length} akun\n`);
+  console.log('Pilih mode:');
+  console.log('  1. 1 akun');
+  console.log('  2. semua');
+  console.log('  3. from x to end\n');
 
-  let targets;
-  if (mode === 'all') {
-    targets = accounts;
-  } else {
-    const idx = parseInt(mode);
+  const pilihan = await ask('Pilihan (1/2/3): ');
+  let targets = [];
+
+  if (pilihan === '1') {
+    const no = await ask(`Akun ke berapa? (1-${accounts.length}): `);
+    const idx = parseInt(no);
     if (isNaN(idx) || idx < 1 || idx > accounts.length) {
-      console.error(`Akun #${mode} tidak valid. Total: ${accounts.length}`);
-      process.exit(1);
+      console.error('Nomor akun tidak valid'); process.exit(1);
     }
     targets = [accounts[idx - 1]];
+
+  } else if (pilihan === '2') {
+    targets = accounts;
+
+  } else if (pilihan === '3') {
+    const from = await ask(`Mulai dari akun ke berapa? (1-${accounts.length}): `);
+    const idx = parseInt(from);
+    if (isNaN(idx) || idx < 1 || idx > accounts.length) {
+      console.error('Nomor akun tidak valid'); process.exit(1);
+    }
+    targets = accounts.slice(idx - 1);
+    console.log(`Akan jalankan akun #${idx} sampai #${accounts.length} (${targets.length} akun)\n`);
+
+  } else {
+    console.error('Pilihan tidak valid'); process.exit(1);
   }
 
+  console.log();
   const results = [];
   for (let i = 0; i < targets.length; i++) {
     results.push(await connectX(targets[i]));
@@ -184,7 +186,7 @@ async function main() {
 
   const ok   = results.filter(r => r.success).length;
   const fail = results.filter(r => !r.success);
-  console.log(`\n─── RINGKASAN ───`);
+  console.log('\n─── RINGKASAN ───');
   console.log(`✅ Berhasil: ${ok}`);
   console.log(`❌ Gagal   : ${fail.length}`);
   fail.forEach((r, i) => console.log(`   Akun #${targets[i].index}: ${r.error}`));
